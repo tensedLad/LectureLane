@@ -151,6 +151,55 @@ app.get('/app/*', (_req, res) => {
     res.sendFile(require('path').join(__dirname, 'public', 'index.html'));
 });
 
+// Sync endpoint: always fetches fresh data from YouTube (no cache)
+app.post('/api/syncPlaylist', async (req, res) => {
+    const { playlistUrl } = req.body;
+
+    if (!playlistUrl) {
+        return res.status(400).json({ error: 'Playlist URL is required.' });
+    }
+
+    const sanitized = sanitizeUrl(playlistUrl);
+    if (!sanitized) {
+        return res.status(400).json({ error: 'Invalid or unsafe URL provided.' });
+    }
+
+    try {
+        const url = new URL(sanitized);
+        if (!url.hostname.includes('youtube.com') || !url.searchParams.has('list')) {
+            return res.status(400).json({ error: 'Invalid YouTube playlist URL provided.' });
+        }
+    } catch (e) {
+        return res.status(400).json({ error: 'Invalid URL format.' });
+    }
+
+    try {
+        console.log(`[Sync] Fetching fresh playlist data for: ${sanitized}`);
+        const stdout = await runCommand('yt-dlp', ['-J', '--flat-playlist', sanitized]);
+        const data = JSON.parse(stdout);
+        const formattedData = {
+            playlistTitle: data.title || 'Untitled Playlist',
+            videos: (data.entries || []).map(video => ({
+                id: video.id,
+                title: video.title || 'Untitled Video',
+                duration: formatDuration(video.duration),
+            })),
+        };
+
+        // Also update the regular cache
+        const cacheKey = `playlist:${sanitized}`;
+        setCache(cacheKey, formattedData);
+
+        console.log(`[Sync] Found ${formattedData.videos.length} videos in playlist`);
+        return res.json(formattedData);
+    } catch (err) {
+        console.error('[Sync] Error:', err);
+        const message = err && err.message ? err.message : String(err);
+        const isNotFound = /yt-dlp command not found/i.test(message);
+        return res.status(isNotFound ? 500 : 502).json({ error: message });
+    }
+});
+
 app.get('/api/playlist', async (req, res) => {
     const playlistUrl = req.query.url;
     if (!playlistUrl) {

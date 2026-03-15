@@ -883,6 +883,7 @@ const SetupScreen = ({ onSave }) => {
                 result.push({
                     id: s.name.toLowerCase().replace(/\s+/g, '-'),
                     name: s.name,
+                    playlistUrl: s.url,
                     playlistId: (() => { try { return new URL(s.url).searchParams.get('list'); } catch { return ''; } })(),
                     playlistTitle: data.playlistTitle || s.name,
                     videos: (data.videos || []).map(v => ({
@@ -1030,6 +1031,9 @@ const App = () => {
     const [selectedSubjectId, setSelectedSubjectId] = useState(null);
     const [isSidebarOpen, setSidebarOpen] = useState(window.innerWidth > 768);
     const [theme, setTheme] = useLocalStorage('lectureLaneTheme', 'dark');
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncStatus, setSyncStatus] = useState('');
+    const hasSyncedRef = React.useRef(false);
 
     // Apply theme on mount and when it changes
     useEffect(() => {
@@ -1039,6 +1043,123 @@ const App = () => {
     const toggleTheme = () => {
         setTheme(prev => prev === 'dark' ? 'light' : 'dark');
     };
+
+    // Auto-sync playlists on startup
+    useEffect(() => {
+        if (hasSyncedRef.current) return;
+        const isPlayerWindow = window.location.search.includes('player=1');
+        if (isPlayerWindow) return;
+        if (!subjects || subjects.length === 0) return;
+
+        // Check if any subject has playlistUrl or playlistId to construct URL
+        const subjectsToSync = subjects.filter(s => s.playlistUrl || s.playlistId);
+        if (subjectsToSync.length === 0) return;
+
+        hasSyncedRef.current = true;
+        setIsSyncing(true);
+        setSyncStatus('Syncing playlists...');
+
+        const syncAllPlaylists = async () => {
+            let anyChanged = false;
+            const updatedSubjects = [...subjects];
+
+            for (let i = 0; i < updatedSubjects.length; i++) {
+                const subject = updatedSubjects[i];
+                const playlistUrl = subject.playlistUrl || 
+                    (subject.playlistId ? `https://www.youtube.com/playlist?list=${subject.playlistId}` : null);
+                
+                if (!playlistUrl) continue;
+
+                setSyncStatus(`Syncing: ${subject.name}...`);
+
+                try {
+                    const res = await fetch('/api/syncPlaylist', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ playlistUrl })
+                    });
+
+                    if (!res.ok) {
+                        console.warn(`[Sync] Failed to sync ${subject.name}`);
+                        continue;
+                    }
+
+                    const freshData = await res.json();
+                    const freshVideos = freshData.videos || [];
+                    const existingVideos = subject.videos || [];
+
+                    // Build a map of existing video data by ID for quick lookup
+                    const existingMap = new Map();
+                    existingVideos.forEach(v => existingMap.set(v.id, v));
+
+                    // Build the fresh video ID set
+                    const freshIdSet = new Set(freshVideos.map(v => v.id));
+
+                    // Merge: for each video in the fresh list
+                    const mergedVideos = freshVideos.map(freshVideo => {
+                        const existing = existingMap.get(freshVideo.id);
+                        if (existing) {
+                            // Preserve all progress data, update title/duration if changed
+                            return {
+                                ...existing,
+                                title: freshVideo.title,
+                                duration: freshVideo.duration,
+                                durationSeconds: parseDurationToSeconds(freshVideo.duration) || existing.durationSeconds,
+                                thumbnail: `https://i.ytimg.com/vi/${freshVideo.id}/mqdefault.jpg`
+                            };
+                        } else {
+                            // New video - add with default state
+                            return {
+                                id: freshVideo.id,
+                                title: freshVideo.title,
+                                duration: freshVideo.duration,
+                                durationSeconds: parseDurationToSeconds(freshVideo.duration),
+                                thumbnail: `https://i.ytimg.com/vi/${freshVideo.id}/mqdefault.jpg`,
+                                status: 'Not Started',
+                                watchTime: 0,
+                                timeSpent: 0,
+                                notes: ''
+                            };
+                        }
+                    });
+
+                    // Check if anything changed
+                    const removedCount = existingVideos.filter(v => !freshIdSet.has(v.id)).length;
+                    const addedCount = freshVideos.filter(v => !existingMap.has(v.id)).length;
+
+                    if (addedCount > 0 || removedCount > 0) {
+                        anyChanged = true;
+                        console.log(`[Sync] ${subject.name}: +${addedCount} new, -${removedCount} removed`);
+                    }
+
+                    // Also store playlistUrl if it wasn't saved before
+                    updatedSubjects[i] = {
+                        ...subject,
+                        playlistUrl: playlistUrl,
+                        playlistTitle: freshData.playlistTitle || subject.playlistTitle,
+                        videos: mergedVideos
+                    };
+                } catch (err) {
+                    console.warn(`[Sync] Error syncing ${subject.name}:`, err);
+                }
+            }
+
+            if (anyChanged) {
+                setSubjects(updatedSubjects);
+                setSyncStatus('Playlists updated!');
+            } else {
+                setSyncStatus('All playlists up to date');
+            }
+
+            // Clear the status after a delay
+            setTimeout(() => {
+                setIsSyncing(false);
+                setSyncStatus('');
+            }, 3000);
+        };
+
+        syncAllPlaylists();
+    }, [subjects.length]);
 
     const updateSubject = (updatedSubject) => {
         setSubjects(prev => prev.map(s => s.id === updatedSubject.id ? updatedSubject : s));
@@ -1204,6 +1325,13 @@ const App = () => {
     return React.createElement(React.Fragment, null, [
         (!isPlayerWindow && subjects.length > 0) ? React.createElement('button', { key: 'menu', className: 'menu-toggle', onClick: () => setSidebarOpen(!isSidebarOpen) }, '☰') : null,
         (!isPlayerWindow && subjects.length > 0) ? React.createElement(Sidebar, { key: 'sidebar', currentView, setView, isSidebarOpen, theme, toggleTheme }) : null,
+        (syncStatus && !isPlayerWindow) ? React.createElement('div', { 
+            key: 'sync-banner', 
+            className: `sync-banner ${isSyncing ? 'syncing' : 'done'}`
+        }, [
+            isSyncing ? React.createElement('span', { key: 'spinner', className: 'sync-spinner' }, '🔄') : React.createElement('span', { key: 'check', className: 'sync-check' }, '✅'),
+            React.createElement('span', { key: 'text', className: 'sync-text' }, syncStatus)
+        ]) : null,
         React.createElement('main', { key: 'main', className: 'main-content' },
             React.createElement('div', { className: 'content-area' }, isPlayerWindow ? React.createElement(PlayerShell) : renderView())
         )

@@ -874,3 +874,59 @@ textarea {
     display: block;
   }
 }
+
+/* Sync Banner Styles */
+@keyframes syncSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes syncSlideIn {
+  from { opacity: 0; transform: translateY(-100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sync-banner {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 22px;
+  border-radius: 12px;
+  font-family: var(--font-family);
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  animation: syncSlideIn 0.4s ease-out;
+  backdrop-filter: blur(12px);
+}
+
+.sync-banner.syncing {
+  background: linear-gradient(135deg, rgba(146, 141, 171, 0.9), rgba(84, 74, 125, 0.9));
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.sync-banner.done {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.9), rgba(5, 150, 105, 0.9));
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.sync-spinner {
+  display: inline-block;
+  animation: syncSpin 1.2s linear infinite;
+  font-size: 1.1rem;
+}
+
+.sync-check {
+  font-size: 1.1rem;
+}
+
+.sync-text {
+  white-space: nowrap;
+}
